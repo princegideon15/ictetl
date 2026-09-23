@@ -190,7 +190,27 @@
   .toolbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .filter-group  { display: flex; flex-direction: column; gap: 4px; }
   .filter-group select { padding: 8px 10px; min-width: 165px; }
+  .filter-group input[type="search"] { padding: 8px 10px; min-width: 200px; }
   .hint { font-size: .76rem; color: var(--muted); white-space: nowrap; }
+
+  /* ── pagination ── */
+  .pagination {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-top: 14px;
+  }
+  .pagination-info { font-size: .78rem; color: var(--muted); }
+  .pagination-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .page-btn {
+    background: var(--card-bg); color: var(--text);
+    border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 12px; font-size: .8rem; font-weight: 700;
+    min-width: 36px;
+  }
+  .page-btn:hover:not(:disabled) { border-color: var(--gold); color: var(--navy); }
+  [data-theme="dark"] .page-btn:hover:not(:disabled) { color: var(--gold); }
+  .page-btn.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+  .page-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .page-size select { padding: 7px 9px; font-size: .8rem; }
 
   /* ── table ── */
   .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
@@ -312,6 +332,10 @@
       <div class="toolbar-left">
         <div class="card-title" style="border:none;padding:0;margin:0"><span class="dot"></span> Log Entries</div>
         <div class="filter-group">
+          <label for="searchInput">Search</label>
+          <input type="search" id="searchInput" placeholder="Item, borrower, receiver, remarks…">
+        </div>
+        <div class="filter-group">
           <label for="monthFilter">Filter by Month</label>
           <select id="monthFilter"><option value="">All months</option></select>
         </div>
@@ -335,6 +359,7 @@
         </tbody>
       </table>
     </div>
+    <div class="pagination" id="pagination"></div>
   </section>
 </main>
 
@@ -502,7 +527,64 @@ function populateMonthFilter(all) {
 function getFiltered() {
   const all = loadEntries().sort((a,b) => b.id - a.id);
   const m   = $('monthFilter').value;
-  return m ? all.filter(e => monthKey(e.date_out) === m) : all;
+  const q   = ($('searchInput')?.value || '').trim().toLowerCase();
+  let out = m ? all.filter(e => monthKey(e.date_out) === m) : all;
+  if (q) {
+    out = out.filter(e => [
+      e.item_description, e.borrower_name, e.receiver_name, e.remarks
+    ].some(v => (v || '').toLowerCase().includes(q)));
+  }
+  return out;
+}
+
+/* ── pagination state ── */
+let currentPage = 1;
+let pageSize    = 10;
+
+function renderPagination(totalItems) {
+  const wrap = $('pagination');
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (!totalItems) { wrap.innerHTML = ''; return; }
+
+  const start = (currentPage - 1) * pageSize + 1;
+  const end   = Math.min(currentPage * pageSize, totalItems);
+
+  let pageBtns = '';
+  const maxButtons = 5;
+  let from = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+  let to   = Math.min(totalPages, from + maxButtons - 1);
+  from = Math.max(1, to - maxButtons + 1);
+  for (let p = from; p <= to; p++) {
+    pageBtns += `<button class="page-btn${p===currentPage?' active':''}" data-page="${p}">${p}</button>`;
+  }
+
+  wrap.innerHTML = `
+    <div class="pagination-info">Showing ${start}–${end} of ${totalItems}</div>
+    <div class="pagination-controls">
+      <button class="page-btn" data-page="1" ${currentPage===1?'disabled':''}>« First</button>
+      <button class="page-btn" data-page="${currentPage-1}" ${currentPage===1?'disabled':''}>‹ Prev</button>
+      ${pageBtns}
+      <button class="page-btn" data-page="${currentPage+1}" ${currentPage===totalPages?'disabled':''}>Next ›</button>
+      <button class="page-btn" data-page="${totalPages}" ${currentPage===totalPages?'disabled':''}>Last »</button>
+    </div>
+    <div class="page-size">
+      <select id="pageSizeSelect">
+        ${[10,25,50,100].map(n => `<option value="${n}" ${n===pageSize?'selected':''}>${n} / page</option>`).join('')}
+      </select>
+    </div>`;
+
+  wrap.querySelectorAll('button[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = Number(btn.dataset.page);
+      if (p >= 1 && p <= totalPages && p !== currentPage) { currentPage = p; render(); }
+    });
+  });
+  $('pageSizeSelect').addEventListener('change', e => {
+    pageSize = Number(e.target.value);
+    currentPage = 1;
+    render();
+  });
 }
 
 /* ── render ── */
@@ -511,18 +593,26 @@ function render() {
   const entries = getFiltered();
   populateMonthFilter(all);
   const m = $('monthFilter').value;
+  const q = ($('searchInput')?.value || '').trim();
   $('countHint').textContent = entries.length
-    ? `${entries.length} entr${entries.length===1?'y':'ies'}${m?' · '+monthLabel(m):''}`
-    : m ? `No entries for ${monthLabel(m)}` : '';
+    ? `${entries.length} entr${entries.length===1?'y':'ies'}${m?' · '+monthLabel(m):''}${q?' · matching “'+q+'”':''}`
+    : (m || q) ? `No matching entries` : '';
 
   const tbody = $('entriesBody');
   if (!entries.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${
-      m ? 'No entries for this month.' : 'No entries yet — log an item above.'
+      (m || q) ? 'No entries match your search/filter.' : 'No entries yet — log an item above.'
     }</td></tr>`;
+    renderPagination(0);
     return;
   }
-  tbody.innerHTML = entries.map(e => {
+
+  const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const startIdx = (currentPage - 1) * pageSize;
+  const pageEntries = entries.slice(startIdx, startIdx + pageSize);
+
+  tbody.innerHTML = pageEntries.map(e => {
     const ret = !!e.date_in;
     return `<tr>
       <td>${e.qty}</td>
@@ -551,6 +641,8 @@ function render() {
       </td>
     </tr>`;
   }).join('');
+
+  renderPagination(entries.length);
 }
 
 
@@ -635,7 +727,13 @@ $('entriesBody').addEventListener('change', e => {
   if (saveEntries(entries)) toast('Remark saved.');
 });
 
-$('monthFilter').addEventListener('change', render);
+$('monthFilter').addEventListener('change', () => { currentPage = 1; render(); });
+
+let searchDebounce;
+$('searchInput').addEventListener('input', () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => { currentPage = 1; render(); }, 200);
+});
 
 /* ── init ── */
 initTheme();
